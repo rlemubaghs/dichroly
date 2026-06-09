@@ -1,0 +1,2 @@
+"""Dichroly spectral visualization application."""
+

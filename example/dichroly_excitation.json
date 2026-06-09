@@ -1,0 +1,45 @@
+{
+  "light_source": "Blue (470 nm) LED (Bluebox Optics niji 7)",
+  "fluorophore": "GCaMP6",
+  "filters": [
+    {
+      "name": "FF01-550/88",
+      "mode": "visualize",
+      "aoi": "0",
+      "aoi_span": 15,
+      "aoi_step": 5
+    },
+    {
+      "name": "FF495-Di03",
+      "mode": "reflection",
+      "aoi": "45",
+      "aoi_span": 5,
+      "aoi_step": 1
+    },
+    {
+      "name": "FF01-470/22",
+      "mode": "transmission",
+      "aoi": "0",
+      "aoi_span": 5,
+      "aoi_step": 1
+    }
+  ],
+  "plot_range": {
+    "x_start": "400",
+    "x_end": "650",
+    "y_min": "0",
+    "y_max": "1",
+    "auc_percent_min": "30",
+    "auc_percent_max": "100"
+  },
+  "aoi_defaults": {
+    "span": 15,
+    "step": 5
+  },
+  "explorer_result": {
+    "excitation": true,
+    "emission": false,
+    "light_source": false
+  },
+  "aoi_result": "excitation"
+}
