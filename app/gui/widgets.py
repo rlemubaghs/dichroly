@@ -2,8 +2,21 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLineEdit, QPushButton, QSizePolicy
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLineEdit, QListView, QPushButton, QProxyStyle, QSizePolicy, QStyle, QStyledItemDelegate
+
+
+class ComboItemDelegate(QStyledItemDelegate):
+    def sizeHint(self, option, index):  # noqa: ANN001
+        size = super().sizeHint(option, index)
+        return QSize(size.width(), 38)
+
+
+class NonNativeComboPopupStyle(QProxyStyle):
+    def styleHint(self, hint, option=None, widget=None, returnData=None):  # noqa: ANN001
+        if hint == QStyle.SH_ComboBox_Popup:
+            return 0
+        return super().styleHint(hint, option, widget, returnData)
 
 
 class Panel(QFrame):
@@ -33,7 +46,35 @@ class FilterRow(Panel):
         self.mode_combo = QComboBox()
         self.mode_combo.setObjectName("CompactCombo")
         self.mode_combo.addItems(["transmission", "reflection", "visualize", "excluded"])
-        self.mode_combo.setFixedWidth(132)
+        self.mode_combo.setFixedWidth(168)
+        popup_style = NonNativeComboPopupStyle()
+        self.mode_combo.setStyle(popup_style)
+        self.mode_combo._dichroly_popup_style = popup_style  # type: ignore[attr-defined]
+        self.mode_combo.setEditable(True)
+        if self.mode_combo.lineEdit():
+            self.mode_combo.lineEdit().setReadOnly(True)
+            self.mode_combo.lineEdit().setCursor(Qt.ArrowCursor)
+            self.mode_combo.lineEdit().setStyleSheet("border: 0; background: transparent; padding: 0 0 0 7px;")
+        mode_view = QListView()
+        mode_view.setObjectName("ModePopup")
+        mode_view.setFrameShape(QFrame.NoFrame)
+        mode_view.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+        mode_view.setAttribute(Qt.WA_StyledBackground, True)
+        mode_view.setAttribute(Qt.WA_TranslucentBackground, True)
+        mode_view.setContentsMargins(1, 1, 1, 1)
+        mode_view.setWordWrap(False)
+        mode_view.setTextElideMode(Qt.ElideNone)
+        mode_view.setUniformItemSizes(True)
+        mode_view.setSpacing(0)
+        mode_view.setMinimumWidth(190)
+        mode_view.setMaximumHeight(154)
+        mode_view.setItemDelegate(ComboItemDelegate(mode_view))
+        mode_view.viewport().setAutoFillBackground(False)
+        mode_view.viewport().setAttribute(Qt.WA_TranslucentBackground, True)
+        mode_view.viewport().setContentsMargins(1, 1, 1, 1)
+        mode_view.viewport().setStyleSheet("background: transparent; border: 0;")
+        self.mode_combo.setView(mode_view)
+        self.mode_combo.setMaxVisibleItems(8)
 
         self.aoi_edit = QLineEdit("0")
         self.aoi_edit.setObjectName("CompactField")
@@ -45,7 +86,7 @@ class FilterRow(Panel):
         self.remove_button.setObjectName("Danger")
         self.remove_button.setFixedWidth(78)
         layout.addWidget(self.filter_combo, 3)
-        layout.addWidget(self.mode_combo, 1)
+        layout.addWidget(self.mode_combo, 0)
         layout.addWidget(self.aoi_edit, 1)
         layout.addWidget(self.remove_button)
 

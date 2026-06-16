@@ -345,6 +345,105 @@ class AoiAreaPlot:
         return self._last_title
 
 
+class AoiHeatmapPlot:
+    def __init__(self, *, height: int = 430) -> None:
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+        from matplotlib.figure import Figure
+        from PySide6.QtWidgets import QSizePolicy
+
+        self.figure = Figure(figsize=(5, 5))
+        self.canvas = FigureCanvasQTAgg(self.figure)
+        self.canvas.setMinimumWidth(height)
+        self.canvas.setMaximumWidth(height)
+        self.canvas.setMinimumHeight(height)
+        self.canvas.setMaximumHeight(height)
+        self.canvas.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.canvas.wheelEvent = lambda event: event.ignore()  # type: ignore[method-assign]
+        self.axes = self.figure.add_subplot(111)
+        self.axes.set_position([0.16, 0.20, 0.64, 0.66])
+        self.axes.set_box_aspect(1)
+        self.colorbar = None
+        self.container = _canvas_with_save_button(
+            self.figure,
+            self.canvas,
+            self._save_title,
+            axes_getter=lambda: self.axes,
+            inside_axes=True,
+        )
+        self._last_title = "AOI heatmap"
+
+    def widget(self):
+        return self.container
+
+    def plot(
+        self,
+        x_values: list[int],
+        y_values: list[int],
+        values: list[list[float]],
+        *,
+        title: str,
+        x_label: str,
+        y_label: str,
+        value_range: tuple[float, float] | None = None,
+        value_label: str = "Area",
+    ) -> None:
+        if self.colorbar is not None:
+            self.colorbar.remove()
+            self.colorbar = None
+        self.axes.clear()
+        self._last_title = title
+        self.axes.set_position([0.16, 0.20, 0.64, 0.66])
+        self.axes.set_box_aspect(1)
+        self.axes.set_title(title)
+        self.axes.set_xlabel(x_label)
+        self.axes.set_ylabel(y_label)
+        if not x_values or not y_values or not values:
+            self.axes.text(0.5, 0.5, "Select two filters and run analysis", ha="center", va="center", transform=self.axes.transAxes)
+            self.canvas.draw_idle()
+            return
+
+        x_min, x_max = _heatmap_extent(x_values)
+        y_min, y_max = _heatmap_extent(y_values)
+        image = self.axes.imshow(
+            values,
+            origin="lower",
+            aspect="auto",
+            interpolation="bicubic",
+            cmap="jet",
+            extent=[x_min, x_max, y_min, y_max],
+            vmin=value_range[0] if value_range else None,
+            vmax=value_range[1] if value_range else None,
+        )
+        self.axes.set_xticks(x_values)
+        self.axes.set_yticks(y_values)
+        self.colorbar = self.figure.colorbar(image, ax=self.axes, fraction=0.046, pad=0.04)
+        self.colorbar.set_label(value_label)
+        self.canvas.draw_idle()
+        if hasattr(self.container, "update_save_button_position"):
+            self.container.update_save_button_position()
+
+    def clear(self) -> None:
+        if self.colorbar is not None:
+            self.colorbar.remove()
+            self.colorbar = None
+        self.axes.clear()
+        self.axes.set_title("AOI heatmap")
+        self.axes.set_box_aspect(1)
+        self.axes.text(0.5, 0.5, "Run analysis to create heatmap", ha="center", va="center", transform=self.axes.transAxes)
+        self.canvas.draw_idle()
+
+    def _save_title(self) -> str:
+        return self._last_title
+
+
+def _heatmap_extent(values: list[int]) -> tuple[float, float]:
+    if len(values) <= 1:
+        value = float(values[0]) if values else 0.0
+        return value - 0.5, value + 0.5
+    step = min(abs(right - left) for left, right in zip(values, values[1:]) if right != left) / 2.0
+    return float(values[0]) - step, float(values[-1]) + step
+
+
 def _canvas_with_save_button(
     figure,
     canvas,

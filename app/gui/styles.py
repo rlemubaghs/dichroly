@@ -137,6 +137,10 @@ QComboBox:hover, QSpinBox:hover, QLineEdit:hover {
 QComboBox:focus, QSpinBox:focus, QLineEdit:focus {
     border-color: #8ab4f8;
 }
+QLineEdit:disabled {
+    color: #8e8e93;
+    background: #fbfbfd;
+}
 QComboBox::drop-down {
     subcontrol-origin: padding;
     subcontrol-position: top right;
@@ -157,18 +161,56 @@ QComboBox#CompactCombo::down-arrow {
     margin-right: 7px;
 }
 QComboBox QAbstractItemView {
-    background: #ffffff;
+    background: transparent;
     border: 1px solid #d1d1d6;
-    border-radius: 10px;
-    padding: 5px;
+    border-radius: 12px;
+    padding: 1px;
+    margin: 0;
     outline: 0;
-    selection-background-color: #e8f2ff;
+    selection-background-color: #ffffff;
     selection-color: #1d1d1f;
 }
 QComboBox QAbstractItemView::item {
     min-height: 24px;
-    padding: 4px 8px;
-    border-radius: 6px;
+    padding: 5px 10px;
+    border-radius: 8px;
+}
+QComboBox QAbstractItemView::item:selected {
+    background: #ffffff;
+    color: #1d1d1f;
+}
+QListView#ModePopup, QListView#FlatComboPopup {
+    background: transparent;
+    border: 1px solid #d1d1d6;
+    border-radius: 12px;
+    padding: 1px;
+    margin: 0;
+    outline: 0;
+    selection-background-color: #ffffff;
+    selection-color: #1d1d1f;
+}
+QListView#ModePopup::viewport, QListView#FlatComboPopup::viewport {
+    background: transparent;
+    border: 0;
+    margin: 0;
+}
+QListView#ModePopup::item, QListView#FlatComboPopup::item {
+    background: #ffffff;
+    min-height: 28px;
+    padding: 7px 14px;
+    border-radius: 0;
+}
+QListView#ModePopup::item:first, QListView#FlatComboPopup::item:first {
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+}
+QListView#ModePopup::item:last, QListView#FlatComboPopup::item:last {
+    border-bottom-left-radius: 10px;
+    border-bottom-right-radius: 10px;
+}
+QListView#ModePopup::item:selected, QListView#FlatComboPopup::item:selected {
+    background: #ffffff;
+    color: #1d1d1f;
 }
 QListWidget {
     background: #ffffff;

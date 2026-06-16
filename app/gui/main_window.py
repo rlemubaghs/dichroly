@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import csv
+from dataclasses import dataclass
 from itertools import product
 import json
 from pathlib import Path
 import re
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -22,11 +23,15 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListView,
     QMainWindow,
     QPushButton,
     QRadioButton,
     QScrollArea,
     QFrame,
+    QProxyStyle,
+    QStyle,
+    QStyledItemDelegate,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -36,14 +41,40 @@ from PySide6.QtWidgets import (
 
 from app.analysis.aoi_analysis import requested_aoi_values, requested_relative_aoi_values
 from app.analysis.calculations import SelectedFilter, calculate_spectral_result, filter_curve_for_mode
-from app.data.catalog import Catalog, build_catalog, default_data_root, safe_name
+from app.data.catalog import Catalog, build_catalog, default_data_root, project_root, safe_name
 from app.data.downloader import download_filter_configuration, download_single_item
 from app.data.loaders import load_filter, load_fluorophore, load_light_source
 from app.data.searchlight_client import fetch_searchlight_options
 from app.data.spectra import Spectrum, interpolate_values
 from app.gui.styles import APP_STYLESHEET
 from app.gui.widgets import FilterRow, Panel
-from app.plotting.plots import AoiAreaPlot, LINE_COLORS, SpectraPlot, VISUALIZE_FILTER_COLOR
+from app.plotting.plots import AoiAreaPlot, AoiHeatmapPlot, LINE_COLORS, SpectraPlot, VISUALIZE_FILTER_COLOR
+
+
+@dataclass
+class HeatmapSet:
+    title_label: QLabel
+    control_widget: QWidget
+    plot_widget: QWidget
+    x_combo: QComboBox
+    y_combo: QComboBox
+    percent_min: QLineEdit
+    percent_max: QLineEdit
+    auto_percent_check: QCheckBox
+    plot: AoiHeatmapPlot
+
+
+class ComboItemDelegate(QStyledItemDelegate):
+    def sizeHint(self, option, index):  # noqa: ANN001
+        size = super().sizeHint(option, index)
+        return QSize(size.width(), 38)
+
+
+class NonNativeComboPopupStyle(QProxyStyle):
+    def styleHint(self, hint, option=None, widget=None, returnData=None):  # noqa: ANN001
+        if hint == QStyle.SH_ComboBox_Popup:
+            return 0
+        return super().styleHint(hint, option, widget, returnData)
 
 
 class MainWindow(QMainWindow):
@@ -63,6 +94,7 @@ class MainWindow(QMainWindow):
         self.aoi_auc_filter_names: list[str] = []
         self.aoi_auc_filter_entries: list[tuple[str, str]] = []
         self.aoi_auc_widgets: dict[str, tuple[Panel, QTableWidget, AoiAreaPlot]] = {}
+        self.aoi_heatmap_filter_data: dict[str, dict] = {}
         self.unknown_online_queries: set[tuple[str, str]] = set()
         self.status_buffers: dict[QLabel, list[str]] = {}
         self.explorer_result_visible = False
@@ -268,6 +300,46 @@ class MainWindow(QMainWindow):
                 self.aoi_auc_percent_max,
             )
         )
+
+        aoi_result_controls = Panel()
+        aoi_result_controls.setObjectName("ToolbarPanel")
+        aoi_result_controls_layout = QHBoxLayout(aoi_result_controls)
+        aoi_result_controls_layout.setContentsMargins(12, 8, 12, 8)
+        aoi_result_controls_layout.setSpacing(7)
+        aoi_result_controls_layout.addWidget(_section_label("Result"))
+        self.aoi_show_excitation_check = QRadioButton("Excitation")
+        self.aoi_show_excitation_check.setObjectName("PlotToggle")
+        self.aoi_show_emission_check = QRadioButton("Emission")
+        self.aoi_show_emission_check.setObjectName("PlotToggle")
+        self.aoi_show_light_source_check = QRadioButton("Light source")
+        self.aoi_show_light_source_check.setObjectName("PlotToggle")
+        self.aoi_show_emission_check.setChecked(True)
+        self.aoi_show_excitation_check.toggled.connect(self._refresh_aoi_result_plot)
+        self.aoi_show_emission_check.toggled.connect(self._refresh_aoi_result_plot)
+        self.aoi_show_light_source_check.toggled.connect(self._refresh_aoi_result_plot)
+        aoi_result_controls_layout.addWidget(self.aoi_show_excitation_check)
+        aoi_result_controls_layout.addWidget(self.aoi_show_emission_check)
+        aoi_result_controls_layout.addWidget(self.aoi_show_light_source_check)
+        aoi_result_controls_layout.addStretch(1)
+        self.aoi_result_controls = aoi_result_controls
+        selection_layout.addWidget(aoi_result_controls)
+
+        heatmap_options = Panel()
+        heatmap_options.setObjectName("InlinePanel")
+        heatmap_options_layout = QVBoxLayout(heatmap_options)
+        heatmap_options_layout.setContentsMargins(12, 10, 12, 10)
+        heatmap_options_layout.setSpacing(8)
+        heatmap_header = QHBoxLayout()
+        heatmap_header.addWidget(_section_label("Heatmap"))
+        add_heatmap = QPushButton("Add heatmap")
+        add_heatmap.clicked.connect(self._add_aoi_heatmap_set)
+        heatmap_header.addWidget(add_heatmap, alignment=Qt.AlignRight)
+        heatmap_options_layout.addLayout(heatmap_header)
+        self.aoi_heatmap_sets: list[HeatmapSet] = []
+        self.aoi_heatmap_controls_layout = QVBoxLayout()
+        self.aoi_heatmap_controls_layout.setSpacing(7)
+        heatmap_options_layout.addLayout(self.aoi_heatmap_controls_layout)
+        selection_layout.addWidget(heatmap_options)
         layout.addWidget(selection_panel)
 
         run_row = QHBoxLayout()
@@ -292,25 +364,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.aoi_result_divider_top)
         layout.addSpacing(8)
 
-        aoi_result_controls = Panel()
-        aoi_result_controls.setObjectName("ToolbarPanel")
-        aoi_result_controls_layout = QHBoxLayout(aoi_result_controls)
-        aoi_result_controls_layout.setContentsMargins(12, 8, 12, 8)
-        aoi_result_controls_layout.setSpacing(7)
-        aoi_result_controls_layout.addWidget(_section_label("Result"))
-        self.aoi_show_excitation_check = QRadioButton("Excitation")
-        self.aoi_show_excitation_check.setObjectName("PlotToggle")
-        self.aoi_show_emission_check = QRadioButton("Emission")
-        self.aoi_show_emission_check.setObjectName("PlotToggle")
-        self.aoi_show_emission_check.setChecked(True)
-        self.aoi_show_excitation_check.toggled.connect(self._refresh_aoi_result_plot)
-        self.aoi_show_emission_check.toggled.connect(self._refresh_aoi_result_plot)
-        aoi_result_controls_layout.addWidget(self.aoi_show_excitation_check)
-        aoi_result_controls_layout.addWidget(self.aoi_show_emission_check)
-        aoi_result_controls_layout.addStretch(1)
-        self.aoi_result_controls = aoi_result_controls
-        layout.addWidget(aoi_result_controls)
-
         self.aoi_result_plot = SpectraPlot()
         self.aoi_result_widget = self.aoi_result_plot.widget()
         layout.addWidget(self.aoi_result_widget)
@@ -324,7 +377,25 @@ class MainWindow(QMainWindow):
         self.aoi_area_layout.setContentsMargins(0, 0, 0, 0)
         self.aoi_area_layout.setSpacing(14)
         layout.addWidget(self.aoi_area_panel)
+        self.aoi_heatmap_divider_top = _divider()
+        layout.addSpacing(8)
+        layout.addWidget(self.aoi_heatmap_divider_top)
+        layout.addSpacing(8)
+
+        self.aoi_heatmap_panel = Panel()
+        heatmap_layout = QVBoxLayout(self.aoi_heatmap_panel)
+        heatmap_layout.setContentsMargins(12, 12, 12, 12)
+        heatmap_layout.setSpacing(12)
+        heatmap_layout.addWidget(_section_label("Filter heatmap"))
+        self.aoi_heatmap_body_layout = QGridLayout()
+        self.aoi_heatmap_body_layout.setHorizontalSpacing(18)
+        self.aoi_heatmap_body_layout.setVerticalSpacing(18)
+        self.aoi_heatmap_body_layout.setColumnStretch(0, 1)
+        self.aoi_heatmap_body_layout.setColumnStretch(1, 1)
+        heatmap_layout.addLayout(self.aoi_heatmap_body_layout)
+        layout.addWidget(self.aoi_heatmap_panel)
         layout.addStretch(1)
+        self._add_aoi_heatmap_set()
         self._sync_aoi_selection_mirror()
         self._refresh_aoi_plots()
         self._resize_aoi_auc_summary()
@@ -474,8 +545,121 @@ class MainWindow(QMainWindow):
                 self.aoi_filter_ranges.pop(key, None)
         if not mirrored:
             self.aoi_filter_rows_layout.addWidget(QLabel("No filters selected"))
+        self._sync_aoi_heatmap_filter_choices()
         self._sync_aoi_comparison_plots()
         self._refresh_aoi_plots()
+
+    def _sync_aoi_heatmap_filter_choices(self) -> None:
+        if not hasattr(self, "aoi_heatmap_sets"):
+            return
+        rows = _included_filter_rows(self.filter_rows)
+        choices = [(_row_key(row), f"{row.selected_filter()} ({row.selected_mode()})") for row in rows]
+        for index, heatmap in enumerate(self.aoi_heatmap_sets):
+            preferred_x = index * 2
+            preferred_y = index * 2 + 1
+            _populate_key_combo(heatmap.x_combo, choices, preferred_index=preferred_x)
+            _populate_key_combo(heatmap.y_combo, choices, preferred_index=preferred_y, avoid_key=heatmap.x_combo.currentData())
+        self._refresh_aoi_heatmap()
+
+    def _add_aoi_heatmap_set(self) -> None:
+        if not hasattr(self, "aoi_heatmap_controls_layout") or not hasattr(self, "aoi_heatmap_body_layout"):
+            return
+        control_widget = QWidget()
+        control_layout = QVBoxLayout(control_widget)
+        control_layout.setContentsMargins(0, 0, 0, 0)
+        control_layout.setSpacing(6)
+
+        row_layout = QHBoxLayout()
+        row_layout.setSpacing(7)
+        title_label = QLabel("Filter heatmap")
+        row_layout.addWidget(title_label)
+        x_combo = QComboBox()
+        x_combo.setFixedWidth(300)
+        y_combo = QComboBox()
+        y_combo.setFixedWidth(300)
+        x_combo.currentIndexChanged.connect(lambda _index: self._refresh_aoi_heatmap())
+        y_combo.currentIndexChanged.connect(lambda _index: self._refresh_aoi_heatmap())
+        row_layout.addWidget(QLabel("X"))
+        row_layout.addWidget(x_combo)
+        row_layout.addWidget(QLabel("Y"))
+        row_layout.addWidget(y_combo)
+        remove_button = QPushButton("Remove")
+        remove_button.setObjectName("Danger")
+        remove_button.setFixedWidth(78)
+        row_layout.addStretch(1)
+        row_layout.addWidget(remove_button)
+        control_layout.addLayout(row_layout)
+
+        range_layout = QHBoxLayout()
+        range_layout.setSpacing(7)
+        percent_min = _range_edit("0", width=42)
+        percent_max = _range_edit("100", width=42)
+        auto_percent_check = QCheckBox("Auto plot")
+        auto_percent_check.setChecked(True)
+        for edit in (percent_min, percent_max):
+            edit.editingFinished.connect(self._refresh_aoi_heatmap)
+        auto_percent_check.toggled.connect(lambda _checked: self._on_heatmap_auto_percent_changed())
+        range_layout.addWidget(auto_percent_check)
+        range_layout.addSpacing(14)
+        range_layout.addWidget(QLabel("Plot %"))
+        range_layout.addWidget(percent_min)
+        range_layout.addWidget(QLabel("to"))
+        range_layout.addWidget(percent_max)
+        range_layout.addStretch(1)
+        control_layout.addLayout(range_layout)
+        self.aoi_heatmap_controls_layout.addWidget(control_widget)
+        percent_min.setEnabled(False)
+        percent_max.setEnabled(False)
+
+        slot = QWidget()
+        slot_layout = QVBoxLayout(slot)
+        slot_layout.setContentsMargins(0, 0, 0, 0)
+        slot_layout.setSpacing(8)
+        plot = AoiHeatmapPlot()
+        slot_layout.addWidget(plot.widget(), alignment=Qt.AlignHCenter)
+        heatmap = HeatmapSet(
+            title_label=title_label,
+            control_widget=control_widget,
+            plot_widget=slot,
+            x_combo=x_combo,
+            y_combo=y_combo,
+            percent_min=percent_min,
+            percent_max=percent_max,
+            auto_percent_check=auto_percent_check,
+            plot=plot,
+        )
+        remove_button.clicked.connect(lambda _checked=False, item=heatmap: self._remove_aoi_heatmap_set(item))
+        self.aoi_heatmap_sets.append(heatmap)
+        self._reflow_aoi_heatmap_plots()
+        self._sync_aoi_heatmap_filter_choices()
+
+    def _remove_aoi_heatmap_set(self, heatmap: HeatmapSet) -> None:
+        if heatmap not in self.aoi_heatmap_sets:
+            return
+        self.aoi_heatmap_sets.remove(heatmap)
+        self.aoi_heatmap_controls_layout.removeWidget(heatmap.control_widget)
+        self.aoi_heatmap_body_layout.removeWidget(heatmap.plot_widget)
+        heatmap.control_widget.deleteLater()
+        heatmap.plot_widget.deleteLater()
+        self._renumber_aoi_heatmaps()
+        self._reflow_aoi_heatmap_plots()
+        self._refresh_aoi_heatmap()
+
+    def _renumber_aoi_heatmaps(self) -> None:
+        for heatmap in self.aoi_heatmap_sets:
+            heatmap.title_label.setText("Filter heatmap")
+
+    def _reflow_aoi_heatmap_plots(self) -> None:
+        for index, heatmap in enumerate(self.aoi_heatmap_sets):
+            self.aoi_heatmap_body_layout.removeWidget(heatmap.plot_widget)
+            self.aoi_heatmap_body_layout.addWidget(heatmap.plot_widget, index // 2, index % 2)
+
+    def _on_heatmap_auto_percent_changed(self) -> None:
+        for heatmap in self.aoi_heatmap_sets:
+            manual = not heatmap.auto_percent_check.isChecked()
+            heatmap.percent_min.setEnabled(manual)
+            heatmap.percent_max.setEnabled(manual)
+        self._refresh_aoi_heatmap()
 
     def _aoi_filter_control_row(self, row: FilterRow, key: str) -> Panel:
         panel = Panel()
@@ -620,6 +804,7 @@ class MainWindow(QMainWindow):
         self._refresh_live_plot()
         self._refresh_result_plot()
         self._refresh_aoi_plots()
+        self._refresh_aoi_heatmap()
 
     def _set_explorer_result_visible(self, visible: bool) -> None:
         self.explorer_result_visible = visible
@@ -632,10 +817,11 @@ class MainWindow(QMainWindow):
         for attr in (
             "aoi_plots_container",
             "aoi_result_divider_top",
-            "aoi_result_controls",
             "aoi_result_widget",
             "aoi_area_divider_top",
             "aoi_area_panel",
+            "aoi_heatmap_divider_top",
+            "aoi_heatmap_panel",
         ):
             if hasattr(self, attr):
                 getattr(self, attr).setVisible(visible)
@@ -867,7 +1053,7 @@ class MainWindow(QMainWindow):
                 continue
             if curve.kind == "result_emission" and not self.aoi_show_emission_check.isChecked():
                 continue
-            if curve.kind == "result_light_source":
+            if curve.kind == "result_light_source" and not self.aoi_show_light_source_check.isChecked():
                 continue
             visible_curves.append(curve)
         return visible_curves
@@ -898,6 +1084,8 @@ class MainWindow(QMainWindow):
             )
 
     def _aoi_auc_weight_curve(self) -> Spectrum | None:
+        if self.aoi_show_light_source_check.isChecked():
+            return self._load_selected_light_source_local()
         fluorophore = self._load_selected_fluorophore_local()
         if fluorophore is None:
             return None
@@ -942,7 +1130,7 @@ class MainWindow(QMainWindow):
         path_text, _selected_filter = QFileDialog.getSaveFileName(
             self,
             "Save Dichroly inputs",
-            str(Path.home() / "dichroly_inputs.json"),
+            str(project_root() / "dichroly_inputs.json"),
             "JSON files (*.json)",
         )
         if not path_text:
@@ -958,7 +1146,7 @@ class MainWindow(QMainWindow):
         path_text, _selected_filter = QFileDialog.getOpenFileName(
             self,
             "Load Dichroly inputs",
-            str(Path.home()),
+            str(project_root()),
             "JSON files (*.json)",
         )
         if not path_text:
@@ -1040,8 +1228,16 @@ class MainWindow(QMainWindow):
                 "emission": self.show_emission_check.isChecked(),
                 "light_source": self.show_light_source_check.isChecked(),
             },
-            "aoi_result": "emission" if self.aoi_show_emission_check.isChecked() else "excitation",
+            "aoi_result": self._aoi_result_mode(),
+            "heatmaps": self._heatmap_input_state(),
         }
+
+    def _aoi_result_mode(self) -> str:
+        if self.aoi_show_light_source_check.isChecked():
+            return "light_source"
+        if self.aoi_show_emission_check.isChecked():
+            return "emission"
+        return "excitation"
 
     def _apply_input_state(self, payload: dict) -> None:
         _set_combo_catalog_text(
@@ -1096,22 +1292,70 @@ class MainWindow(QMainWindow):
         self.show_excitation_check.setChecked(bool(explorer_result.get("excitation", True)))
         self.show_emission_check.setChecked(bool(explorer_result.get("emission", True)))
         self.show_light_source_check.setChecked(bool(explorer_result.get("light_source", True)))
-        if payload.get("aoi_result", "emission") == "emission":
+        aoi_result = _normalize_aoi_result_mode(payload.get("aoi_result", "emission"))
+        if aoi_result == "light_source":
+            self.aoi_show_light_source_check.setChecked(True)
+        elif aoi_result == "emission":
             self.aoi_show_emission_check.setChecked(True)
         else:
             self.aoi_show_excitation_check.setChecked(True)
         self._on_explorer_selection_changed(allow_download=False)
+        self._apply_heatmap_input_state(payload.get("heatmaps", []))
         self._refresh_explorer_plots()
+
+    def _heatmap_input_state(self) -> list[dict]:
+        if not hasattr(self, "aoi_heatmap_sets"):
+            return []
+        included_keys = [key for key, _name in _included_filter_entries(self.filter_rows)]
+        heatmaps = []
+        for heatmap in self.aoi_heatmap_sets:
+            x_key = heatmap.x_combo.currentData()
+            y_key = heatmap.y_combo.currentData()
+            heatmaps.append(
+                {
+                    "x_index": included_keys.index(x_key) if x_key in included_keys else 0,
+                    "y_index": included_keys.index(y_key) if y_key in included_keys else 1,
+                    "auto_percent": heatmap.auto_percent_check.isChecked(),
+                    "percent_min": heatmap.percent_min.text(),
+                    "percent_max": heatmap.percent_max.text(),
+                }
+            )
+        return heatmaps
+
+    def _apply_heatmap_input_state(self, saved_heatmaps: object) -> None:
+        if not hasattr(self, "aoi_heatmap_sets"):
+            return
+        while self.aoi_heatmap_sets:
+            self._remove_aoi_heatmap_set(self.aoi_heatmap_sets[0])
+        heatmaps = saved_heatmaps if isinstance(saved_heatmaps, list) and saved_heatmaps else [{}]
+        for saved in heatmaps:
+            if not isinstance(saved, dict):
+                saved = {}
+            self._add_aoi_heatmap_set()
+            heatmap = self.aoi_heatmap_sets[-1]
+            x_index = _safe_int(saved.get("x_index"), 0)
+            y_index = _safe_int(saved.get("y_index"), 1)
+            if heatmap.x_combo.count():
+                heatmap.x_combo.setCurrentIndex(min(max(0, x_index), heatmap.x_combo.count() - 1))
+            if heatmap.y_combo.count():
+                heatmap.y_combo.setCurrentIndex(min(max(0, y_index), heatmap.y_combo.count() - 1))
+            heatmap.auto_percent_check.setChecked(bool(saved.get("auto_percent", True)))
+            heatmap.percent_min.setText(str(saved.get("percent_min", "0")))
+            heatmap.percent_max.setText(str(saved.get("percent_max", "100")))
+        self._on_heatmap_auto_percent_changed()
 
     def _run_aoi_analysis(self) -> None:
         comparison_curves: dict[str, list[Spectrum]] = {}
         filter_options: list[list[SelectedFilter]] = []
         filter_option_rows: list[FilterRow] = []
+        heatmap_filter_data: dict[str, dict] = {}
         warnings: list[str] = []
-        selected_rows = [row for row in self.filter_rows if row.selected_filter() and row.selected_mode() not in {"excluded", "visualize"}]
+        selected_rows = _included_filter_rows(self.filter_rows)
         if not selected_rows:
             self.aoi_auc_filter_names = []
             self.aoi_auc_filter_entries = []
+            self.aoi_heatmap_filter_data = {}
+            self._refresh_aoi_heatmap()
             self._set_status(self.aoi_warning_label, ["Select one or more included filters in Explorer."])
             return
         self.aoi_auc_filter_names = [row.selected_filter() for row in selected_rows]
@@ -1136,6 +1380,7 @@ class MainWindow(QMainWindow):
                 continue
             spectra_by_aoi: dict[int, object] = {}
             options_for_filter: list[SelectedFilter] = []
+            heatmap_curves: dict[int, Spectrum] = {}
             for aoi in aoi_values:
                 item = self.catalog.find("filters", name)
                 path = _choose_filter_file(item.local_files, aoi) if item and item.local_files else None
@@ -1151,6 +1396,14 @@ class MainWindow(QMainWindow):
                     continue
                 if assumption:
                     warnings.append(assumption)
+                heatmap_curves[aoi] = Spectrum(
+                    _filter_aoi_label(name, aoi, current_aoi),
+                    curve.wavelengths,
+                    curve.values,
+                    curve.kind,
+                    curve.source_path,
+                    curve.assumptions,
+                )
                 comparison_curves[key].append(
                     Spectrum(
                         _filter_aoi_label(name, aoi, current_aoi),
@@ -1168,7 +1421,15 @@ class MainWindow(QMainWindow):
             if options_for_filter:
                 filter_options.append(options_for_filter)
                 filter_option_rows.append(row)
+            if heatmap_curves:
+                heatmap_filter_data[key] = {
+                    "name": name,
+                    "mode": mode,
+                    "aoi_values": list(heatmap_curves),
+                    "curves": heatmap_curves,
+                }
         self.aoi_comparison_curves = comparison_curves
+        self.aoi_heatmap_filter_data = heatmap_filter_data
         self._aoi_visualize_filter_curves(warnings, allow_download=True)
         light_sources = self._load_selected_lights(warnings)
         fluorophore = self._load_selected_fluorophore(warnings)
@@ -1196,6 +1457,59 @@ class MainWindow(QMainWindow):
         self._set_status(self.aoi_warning_label, list(dict.fromkeys(warnings)))
         self._set_aoi_analysis_visible(True)
         self._refresh_aoi_plots()
+        self._refresh_aoi_heatmap()
+
+    def _refresh_aoi_heatmap(self) -> None:
+        if not hasattr(self, "aoi_heatmap_sets"):
+            return
+        for heatmap in self.aoi_heatmap_sets:
+            x_key = heatmap.x_combo.currentData()
+            y_key = heatmap.y_combo.currentData()
+            x_data = self.aoi_heatmap_filter_data.get(x_key)
+            y_data = self.aoi_heatmap_filter_data.get(y_key)
+            if not x_data or not y_data:
+                heatmap.plot.clear()
+                continue
+
+            x_values = sorted(x_data["curves"])
+            y_values = sorted(y_data["curves"])
+            weight_curve = self._aoi_auc_weight_curve()
+            baseline_area = _no_filter_auc(self._aoi_plot_range(), weight_curve)
+            grid = [
+                [
+                    _combined_filter_area(
+                        x_data["curves"][x_aoi],
+                        y_data["curves"][y_aoi],
+                        self._aoi_plot_range(),
+                        weight_curve,
+                    )
+                    / baseline_area
+                    * 100.0
+                    if baseline_area > 0
+                    else 0.0
+                    for x_aoi in x_values
+                ]
+                for y_aoi in y_values
+            ]
+            heatmap.plot.plot(
+                x_values,
+                y_values,
+                grid,
+                title="Filter heatmap",
+                x_label=f"{x_data['name']} {x_data['mode']} AOI (deg)",
+                y_label=f"{y_data['name']} {y_data['mode']} AOI (deg)",
+                value_range=self._aoi_heatmap_percent_range(heatmap),
+                value_label="% of total area",
+            )
+
+    def _aoi_heatmap_percent_range(self, heatmap: HeatmapSet) -> tuple[float, float] | None:
+        if heatmap.auto_percent_check.isChecked():
+            return None
+        start = _float_range_value(heatmap.percent_min, 0.0)
+        end = _float_range_value(heatmap.percent_max, 100.0)
+        if start == end:
+            end = start + 1.0
+        return (min(start, end), max(start, end))
 
     def _load_selected_lights(self, warnings: list[str]):
         name = self.light_combo.currentText().strip()
@@ -1230,6 +1544,18 @@ class MainWindow(QMainWindow):
             return None
         try:
             return load_fluorophore(item.local_files[0], name)
+        except Exception:
+            return None
+
+    def _load_selected_light_source_local(self) -> Spectrum | None:
+        name = self.light_combo.currentText().strip()
+        if not name or name == "Uniform illumination":
+            return None
+        item = self.catalog.find("light_sources", name)
+        if not item or not item.local_files:
+            return None
+        try:
+            return load_light_source(item.local_files[0], name)
         except Exception:
             return None
 
@@ -1465,6 +1791,24 @@ def _area_under_curve(curve: Spectrum, x_range: tuple[int, int], weight_curve: S
     return area
 
 
+def _combined_filter_area(
+    left_curve: Spectrum,
+    right_curve: Spectrum,
+    x_range: tuple[int, int],
+    weight_curve: Spectrum | None = None,
+) -> float:
+    start, end = x_range
+    if not left_curve.wavelengths or not right_curve.wavelengths:
+        return 0.0
+    interior = [wavelength for wavelength in left_curve.wavelengths if start < wavelength < end]
+    interior.extend(wavelength for wavelength in right_curve.wavelengths if start < wavelength < end)
+    axis = sorted({float(start), float(end), *interior})
+    left_values = interpolate_values(left_curve.wavelengths, left_curve.values, axis)
+    right_values = interpolate_values(right_curve.wavelengths, right_curve.values, axis)
+    combined = Spectrum("Combined filter throughput", axis, [left * right for left, right in zip(left_values, right_values)], "filter")
+    return _area_under_curve(combined, x_range, weight_curve)
+
+
 def _no_filter_auc(x_range: tuple[int, int], weight_curve: Spectrum | None = None) -> float:
     if weight_curve is not None:
         unit_filter = Spectrum("No filter", [x_range[0], x_range[1]], [1.0, 1.0], "filter_transmission")
@@ -1490,12 +1834,43 @@ def _included_filter_names(rows: list[FilterRow]) -> list[str]:
     return list(dict.fromkeys(names))
 
 
+def _included_filter_rows(rows: list[FilterRow]) -> list[FilterRow]:
+    return [
+        row
+        for row in rows
+        if row.selected_filter() and row.selected_mode() in {"transmission", "reflection"}
+    ]
+
+
 def _included_filter_entries(rows: list[FilterRow]) -> list[tuple[str, str]]:
     return [
         (_row_key(row), row.selected_filter())
-        for row in rows
-        if row.selected_filter() and row.selected_mode() not in {"excluded", "visualize"}
+        for row in _included_filter_rows(rows)
     ]
+
+
+def _populate_key_combo(
+    combo: QComboBox,
+    choices: list[tuple[str, str]],
+    *,
+    preferred_index: int = 0,
+    avoid_key: str | None = None,
+) -> None:
+    current = combo.currentData()
+    combo.blockSignals(True)
+    combo.clear()
+    for key, label in choices:
+        combo.addItem(label, key)
+    keys = [key for key, _label in choices]
+    if current in keys:
+        combo.setCurrentIndex(keys.index(current))
+    elif choices:
+        index = min(max(0, preferred_index), len(choices) - 1)
+        if avoid_key is not None and keys[index] == avoid_key and len(choices) > 1:
+            index = next((candidate for candidate, key in enumerate(keys) if key != avoid_key), index)
+        combo.setCurrentIndex(index)
+    _install_flat_combo_view(combo)
+    combo.blockSignals(False)
 
 
 def _populate_source_combo(
@@ -1522,11 +1897,37 @@ def _populate_source_combo(
         combo.setItemData(index, item.source_label, Qt.AccessibleDescriptionRole)
 
     _set_combo_catalog_text(combo, catalog, category_key, current, placeholder=placeholder)
+    _install_flat_combo_view(combo)
     combo.blockSignals(False)
     completer = QCompleter([combo.itemText(index) for index in range(combo.count()) if combo.itemText(index)], combo)
     completer.setCaseSensitivity(Qt.CaseInsensitive)
     completer.setFilterMode(Qt.MatchContains)
     combo.setCompleter(completer)
+
+
+def _install_flat_combo_view(combo: QComboBox) -> None:
+    popup_style = NonNativeComboPopupStyle()
+    combo.setStyle(popup_style)
+    combo._dichroly_popup_style = popup_style  # type: ignore[attr-defined]
+    view = QListView()
+    view.setObjectName("FlatComboPopup")
+    view.setFrameShape(QFrame.NoFrame)
+    view.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+    view.setAttribute(Qt.WA_StyledBackground, True)
+    view.setAttribute(Qt.WA_TranslucentBackground, True)
+    view.setContentsMargins(1, 1, 1, 1)
+    view.setWordWrap(False)
+    view.setTextElideMode(Qt.ElideRight)
+    view.setUniformItemSizes(True)
+    view.setSpacing(0)
+    view.setMaximumHeight(306)
+    view.setItemDelegate(ComboItemDelegate(view))
+    view.viewport().setAutoFillBackground(False)
+    view.viewport().setAttribute(Qt.WA_TranslucentBackground, True)
+    view.viewport().setContentsMargins(1, 1, 1, 1)
+    view.viewport().setStyleSheet("background: transparent; border: 0;")
+    combo.setView(view)
+    combo.setMaxVisibleItems(8)
 
 
 def _set_combo_catalog_text(
@@ -1805,6 +2206,22 @@ def _copy_range_text(source: QLineEdit, target: QLineEdit) -> None:
     target.blockSignals(True)
     target.setText(source.text())
     target.blockSignals(False)
+
+
+def _safe_int(value: object, fallback: int) -> int:
+    try:
+        return int(float(str(value)))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _normalize_aoi_result_mode(value: object) -> str:
+    text = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    if text in {"light", "light_source", "source", "result_light_source"}:
+        return "light_source"
+    if text in {"excitation", "result_excitation"}:
+        return "excitation"
+    return "emission"
 
 
 def _range_value(edit: QLineEdit, fallback: int) -> int:

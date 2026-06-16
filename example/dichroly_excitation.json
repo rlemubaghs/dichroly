@@ -17,7 +17,7 @@
       "aoi_step": 1
     },
     {
-      "name": "FF01-470/22",
+      "name": "FF01-475/35",
       "mode": "transmission",
       "aoi": "0",
       "aoi_span": 5,
@@ -41,5 +41,14 @@
     "emission": false,
     "light_source": false
   },
-  "aoi_result": "excitation"
+  "aoi_result": "light_source",
+  "heatmaps": [
+    {
+      "x_index": 0,
+      "y_index": 1,
+      "auto_percent": true,
+      "percent_min": "0",
+      "percent_max": "100"
+    }
+  ]
 }
