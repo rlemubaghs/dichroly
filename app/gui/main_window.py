@@ -164,17 +164,21 @@ class MainWindow(QMainWindow):
         self.light_combo = QComboBox()
         self.light_combo.setEditable(True)
         _populate_source_combo(self.light_combo, self.catalog, "light_sources", placeholder="Uniform illumination")
-        self.light_combo.currentTextChanged.connect(lambda _text: self._on_explorer_selection_changed())
+        self.light_combo.activated.connect(lambda _index: self._on_explorer_selection_changed())
         if self.light_combo.lineEdit():
-            self.light_combo.lineEdit().returnPressed.connect(lambda: self._on_combo_committed("light_sources", self.light_combo))
+            self.light_combo.lineEdit().editingFinished.connect(
+                lambda: self._on_explorer_combo_committed("light_sources", self.light_combo)
+            )
         grid.addWidget(_control_group("Light source", self.light_combo), 0, 0)
 
         self.fluor_combo = QComboBox()
         self.fluor_combo.setEditable(True)
         _populate_source_combo(self.fluor_combo, self.catalog, "fluorophores", placeholder="No fluorophore")
-        self.fluor_combo.currentTextChanged.connect(lambda _text: self._on_explorer_selection_changed())
+        self.fluor_combo.activated.connect(lambda _index: self._on_explorer_selection_changed())
         if self.fluor_combo.lineEdit():
-            self.fluor_combo.lineEdit().returnPressed.connect(lambda: self._on_combo_committed("fluorophores", self.fluor_combo))
+            self.fluor_combo.lineEdit().editingFinished.connect(
+                lambda: self._on_explorer_combo_committed("fluorophores", self.fluor_combo)
+            )
         grid.addWidget(_control_group("Fluorophore", self.fluor_combo), 0, 1)
         selection_layout.addLayout(grid)
 
@@ -461,7 +465,6 @@ class MainWindow(QMainWindow):
         row.committed.connect(lambda combo=row.filter_combo: self._on_combo_committed("filters", combo))
         row.changed.connect(lambda: self._on_filter_row_changed(allow_download=False))
         row.committed.connect(lambda: self._on_filter_row_changed(allow_download=True))
-        row.aoi_changed.connect(lambda: self._on_explorer_selection_changed(allow_download=False))
         row.aoi_committed.connect(lambda: self._on_filter_row_changed(allow_download=True))
         row.removed.connect(self._remove_filter_row)
         self.filter_rows.append(row)
@@ -485,6 +488,10 @@ class MainWindow(QMainWindow):
         self._set_aoi_analysis_visible(False)
         self._refresh_live_plot(allow_download=allow_download)
         self._sync_aoi_selection_mirror()
+
+    def _on_explorer_combo_committed(self, category_key: str, combo: QComboBox) -> None:
+        self._on_combo_committed(category_key, combo)
+        self._on_explorer_selection_changed()
 
     def _on_combo_committed(self, category_key: str, combo: QComboBox) -> None:
         text = combo.currentText().strip()

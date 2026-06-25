@@ -90,13 +90,12 @@ class FilterRow(Panel):
         layout.addWidget(self.aoi_edit, 1)
         layout.addWidget(self.remove_button)
 
-        self.filter_combo.currentTextChanged.connect(lambda _text: self.changed.emit())
+        self.filter_combo.activated.connect(lambda _index: self.changed.emit())
         self.mode_combo.currentTextChanged.connect(lambda _text: self.changed.emit())
-        self.aoi_edit.textChanged.connect(lambda _text: self.aoi_changed.emit())
         self.aoi_edit.editingFinished.connect(self.aoi_committed.emit)
         self.remove_button.clicked.connect(lambda: self.removed.emit(self))
         if self.filter_combo.lineEdit():
-            self.filter_combo.lineEdit().returnPressed.connect(self.committed.emit)
+            self.filter_combo.lineEdit().editingFinished.connect(self.committed.emit)
 
     def selected_filter(self) -> str:
         return self.filter_combo.currentText().strip()
