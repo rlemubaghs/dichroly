@@ -1082,10 +1082,12 @@ class MainWindow(QMainWindow):
                 baseline_area=baseline_area,
                 weight_curve=weight_curve,
             )
+            display_name = _aoi_auc_display_name(rows, fallback=name)
+            _set_aoi_auc_panel_title(_panel, display_name)
             _fill_auc_table(table, rows)
             plot.plot(
                 rows,
-                title=f"{name} area under curve",
+                title=f"{display_name} area under curve",
                 percent_range=self._aoi_auc_percent_range(),
                 percent_denominator=baseline_area,
             )
@@ -2031,7 +2033,9 @@ def _aoi_auc_panel(title: str) -> tuple[Panel, QTableWidget, AoiAreaPlot]:
     layout = QVBoxLayout(panel)
     layout.setContentsMargins(12, 12, 12, 12)
     layout.setSpacing(10)
-    layout.addWidget(_section_label(title))
+    title_label = _section_label(title)
+    title_label.setProperty("aoiAucTitle", True)
+    layout.addWidget(title_label)
 
     body = QHBoxLayout()
     body.setContentsMargins(0, 0, 0, 0)
@@ -2042,6 +2046,18 @@ def _aoi_auc_panel(title: str) -> tuple[Panel, QTableWidget, AoiAreaPlot]:
     body.addWidget(plot.widget())
     layout.addLayout(body)
     return panel, table, plot
+
+
+def _set_aoi_auc_panel_title(panel: Panel, title: str) -> None:
+    for label in panel.findChildren(QLabel):
+        if label.property("aoiAucTitle") and label.text() != title:
+            label.setText(title)
+            return
+
+
+def _aoi_auc_display_name(rows: list[tuple[str, int, str, float, float]], *, fallback: str) -> str:
+    labels = [row[2] for row in rows if row[2]]
+    return labels[0] if labels else fallback
 
 
 def _new_auc_table() -> QTableWidget:

@@ -1,4 +1,7 @@
 # Repo specific
+/scripts/*
+/results/*
+/tests/test_catalogue_aoi_analysis.py
 /data/filters/*
 !/data/filters/.gitkeep
 !/data/filters/searchlight_filter_FF01-470_22_AOI_00deg.csv
